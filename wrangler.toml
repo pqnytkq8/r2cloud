@@ -1,0 +1,56 @@
+# 项目基础配置
+name = "flaredrive"
+type = "javascript"
+compatibility_date = "2024-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Pages 项目配置
+pages_build_caching = true
+
+# 环境变量绑定（本地开发用）
+[env.development]
+vars = { ENVIRONMENT = "development" }
+
+[env.production]
+vars = { ENVIRONMENT = "production" }
+
+# R2 存储桶绑定
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "your-r2-bucket-name"
+# 可选：配置多个环境的不同绑定
+# 在 staging 环境指向测试存储桶
+# [[env.staging.r2_buckets]]
+# binding = "BUCKET"
+# bucket_name = "your-test-bucket-name"
+
+# AWS S3 配置（如果需要连接其他 S3 兼容服务）
+# [env.production.vars]
+# AWS_REGION = "auto"
+
+# KV 命名空间绑定（可选，用于缓存或会话）
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "your-kv-namespace-id"
+# preview_id = "your-preview-namespace-id"
+
+# 构建命令和输出目录
+[build]
+command = "npm run build"
+cwd = "./"
+watch_paths = ["src/**/*.ts", "assets/**", "functions/**"]
+
+[build.upload]
+format = "service-worker"
+main = "./functions/_middleware.ts"
+
+# 开发服务器配置
+[dev]
+ip = "localhost"
+port = 8787
+local_protocol = "http"
+
+# 路由配置
+[[routes]]
+pattern = "example.com/api/*"
+zone_name = "example.com"
