@@ -53,27 +53,66 @@ export async function onRequestGet(context) {
   }
 
   try {
-    const head = await bucket.head(path);
-    if (!head) return notFound();
-
-    const size = Number(head.size || 0);
-    const etag = head.httpEtag;
-    const lastModified = head.uploaded
-      ? new Date(head.uploaded).toUTCString()
-      : null;
+    const rangeHeader = request.headers.get("Range");
     const cacheControl = buildCacheControl(path);
 
-    const ifNoneMatch = request.headers.get("If-None-Match");
-    if (etag && ifNoneMatch && ifNoneMatch.split(",").map((v) => v.trim()).includes(etag)) {
-      const notModifiedHeaders = new Headers();
-      notModifiedHeaders.set("Cache-Control", cacheControl);
-      notModifiedHeaders.set("Accept-Ranges", "bytes");
-      notModifiedHeaders.set("ETag", etag);
-      if (lastModified) notModifiedHeaders.set("Last-Modified", lastModified);
-      return new Response(null, { status: 304, headers: notModifiedHeaders });
+    // 常规下载：只发一次 R2 请求，减少起速延迟
+    if (!rangeHeader) {
+      const object = await bucket.get(path);
+      if (!object) return notFound();
+
+      const etag = object.httpEtag;
+      const lastModified = object.uploaded
+        ? new Date(object.uploaded).toUTCString()
+        : null;
+      const ifNoneMatch = request.headers.get("If-None-Match");
+      if (
+        etag &&
+        ifNoneMatch &&
+        ifNoneMatch
+          .split(",")
+          .map((v) => v.trim())
+          .includes(etag)
+      ) {
+        const notModifiedHeaders = new Headers();
+        notModifiedHeaders.set("Cache-Control", cacheControl);
+        notModifiedHeaders.set("Accept-Ranges", "bytes");
+        notModifiedHeaders.set("ETag", etag);
+        if (lastModified) notModifiedHeaders.set("Last-Modified", lastModified);
+        return new Response(null, { status: 304, headers: notModifiedHeaders });
+      }
+
+      const headers = new Headers();
+      const contentType = object.httpMetadata?.contentType;
+      if (contentType) headers.set("Content-Type", contentType);
+
+      headers.set("Cache-Control", cacheControl);
+      headers.set("Accept-Ranges", "bytes");
+      if (etag) headers.set("ETag", etag);
+      if (lastModified) headers.set("Last-Modified", lastModified);
+
+      const filename = path.split("/").pop() || "download";
+      const encodedFilename = encodeURIComponent(filename);
+      const isDownload = url.searchParams.get("download") === "1";
+      headers.set(
+        "Content-Disposition",
+        `${isDownload ? "attachment" : "inline"}; filename*=UTF-8''${encodedFilename}`
+      );
+
+      if (typeof object.size === "number") {
+        headers.set("Content-Length", String(object.size));
+      }
+
+      return new Response(object.body, {
+        headers,
+        status: 200,
+      });
     }
 
-    const rangeHeader = request.headers.get("Range");
+    // Range 下载：需要 size，才查询 head
+    const head = await bucket.head(path);
+    if (!head) return notFound();
+    const size = Number(head.size || 0);
     const parsedRange = parseRangeHeader(rangeHeader, size);
     if (parsedRange === "invalid") {
       const invalidHeaders = new Headers();
@@ -81,14 +120,12 @@ export async function onRequestGet(context) {
       return new Response("Invalid Range", { status: 416, headers: invalidHeaders });
     }
 
-    const object = parsedRange
-      ? await bucket.get(path, {
+    const object = await bucket.get(path, {
           range: {
             offset: parsedRange.offset,
             length: parsedRange.length,
           },
-        })
-      : await bucket.get(path);
+        });
 
     if (!object) return notFound();
 
@@ -99,6 +136,11 @@ export async function onRequestGet(context) {
     if (contentType) {
       headers.set("Content-Type", contentType);
     }
+
+    const etag = object.httpEtag || head.httpEtag;
+    const lastModified = (object.uploaded || head.uploaded)
+      ? new Date(object.uploaded || head.uploaded).toUTCString()
+      : null;
 
     headers.set("Cache-Control", cacheControl);
     headers.set("Accept-Ranges", "bytes");
@@ -113,21 +155,15 @@ export async function onRequestGet(context) {
       `${isDownload ? "attachment" : "inline"}; filename*=UTF-8''${encodedFilename}`
     );
 
-    let status = 200;
-    if (parsedRange) {
-      status = 206;
-      headers.set(
-        "Content-Range",
-        `bytes ${parsedRange.start}-${parsedRange.end}/${size}`
-      );
-      headers.set("Content-Length", String(parsedRange.length));
-    } else if (typeof object.size === "number") {
-      headers.set("Content-Length", String(object.size));
-    }
+    headers.set(
+      "Content-Range",
+      `bytes ${parsedRange.start}-${parsedRange.end}/${size}`
+    );
+    headers.set("Content-Length", String(parsedRange.length));
 
     return new Response(object.body, {
       headers: headers,
-      status,
+      status: 206,
     });
   } catch (error) {
     console.error("Error reading from R2:", error);
