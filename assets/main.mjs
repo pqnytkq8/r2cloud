@@ -53,6 +53,44 @@ export async function blobDigest(blob) {
 }
 
 export const SIZE_LIMIT = 100 * 1000 * 1000; // 100MB
+const MULTIPART_CONCURRENCY = 4;
+const MULTIPART_MAX_RETRIES = 3;
+const MULTIPART_RETRY_BASE_DELAY = 500;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getMultipartStateKey(key, file) {
+  return `multipart:${key}:${file.size}:${file.lastModified}`;
+}
+
+function loadMultipartState(stateKey) {
+  try {
+    const raw = localStorage.getItem(stateKey);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (_e) {
+    return null;
+  }
+}
+
+function saveMultipartState(stateKey, state) {
+  try {
+    localStorage.setItem(stateKey, JSON.stringify(state));
+  } catch (_e) {}
+}
+
+function clearMultipartState(stateKey) {
+  try {
+    localStorage.removeItem(stateKey);
+  } catch (_e) {}
+}
+
+function calcPartSize(fileSize, partNumber, totalChunks) {
+  if (partNumber < totalChunks) return SIZE_LIMIT;
+  return fileSize - SIZE_LIMIT * (totalChunks - 1);
+}
 
 /**
  * @param {string} key
@@ -62,40 +100,106 @@ export const SIZE_LIMIT = 100 * 1000 * 1000; // 100MB
 export async function multipartUpload(key, file, options) {
   const headers = options?.headers || {};
   headers["content-type"] = file.type;
-
-  const uploadId = await axios
-    .post(`/api/write/items/${key}?uploads`, "", { headers })
-    .then((res) => res.data.uploadId);
   const totalChunks = Math.ceil(file.size / SIZE_LIMIT);
 
-  const promiseGenerator = function* () {
-    for (let i = 1; i <= totalChunks; i++) {
-      const chunk = file.slice((i - 1) * SIZE_LIMIT, i * SIZE_LIMIT);
-      const searchParams = new URLSearchParams({ partNumber: i, uploadId });
-      yield axios
-        .put(`/api/write/items/${key}?${searchParams}`, chunk, {
-          onUploadProgress(progressEvent) {
-            if (typeof options?.onUploadProgress !== "function") return;
-            options.onUploadProgress({
-              loaded: (i - 1) * SIZE_LIMIT + progressEvent.loaded,
-              total: file.size,
-            });
-          },
-        })
-        .then((res) => ({
-          partNumber: i,
-          etag: res.headers.etag,
-        }));
+  const stateKey = getMultipartStateKey(key, file);
+  const cachedState = loadMultipartState(stateKey) || {};
+  let uploadId = cachedState.uploadId;
+  const uploadedPartsMap = cachedState.uploadedParts || {};
+
+  if (!uploadId) {
+    uploadId = await axios
+      .post(`/api/write/items/${key}?uploads`, "", { headers })
+      .then((res) => res.data.uploadId);
+  }
+
+  const loadedByPart = {};
+  for (let i = 1; i <= totalChunks; i++) {
+    if (uploadedPartsMap[i]) {
+      loadedByPart[i] = calcPartSize(file.size, i, totalChunks);
+    } else {
+      loadedByPart[i] = 0;
+    }
+  }
+
+  const reportProgress = () => {
+    if (typeof options?.onUploadProgress !== "function") return;
+    const loaded = Object.values(loadedByPart).reduce(
+      (sum, current) => sum + current,
+      0
+    );
+    options.onUploadProgress({ loaded, total: file.size });
+  };
+
+  saveMultipartState(stateKey, { uploadId, uploadedParts: uploadedPartsMap });
+  reportProgress();
+
+  const pendingPartNumbers = [];
+  for (let i = 1; i <= totalChunks; i++) {
+    if (!uploadedPartsMap[i]) pendingPartNumbers.push(i);
+  }
+
+  const uploadOnePart = async (partNumber) => {
+    const chunk = file.slice(
+      (partNumber - 1) * SIZE_LIMIT,
+      partNumber * SIZE_LIMIT
+    );
+
+    for (let attempt = 1; attempt <= MULTIPART_MAX_RETRIES; attempt++) {
+      try {
+        const searchParams = new URLSearchParams({ partNumber, uploadId });
+        const response = await axios.put(
+          `/api/write/items/${key}?${searchParams}`,
+          chunk,
+          {
+            onUploadProgress(progressEvent) {
+              loadedByPart[partNumber] = Math.min(
+                progressEvent.loaded || 0,
+                calcPartSize(file.size, partNumber, totalChunks)
+              );
+              reportProgress();
+            },
+          }
+        );
+
+        const etag = response.headers.etag;
+        uploadedPartsMap[partNumber] = { partNumber, etag };
+        loadedByPart[partNumber] = calcPartSize(file.size, partNumber, totalChunks);
+        saveMultipartState(stateKey, { uploadId, uploadedParts: uploadedPartsMap });
+        reportProgress();
+        return;
+      } catch (error) {
+        if (attempt >= MULTIPART_MAX_RETRIES) {
+          throw error;
+        }
+        const delay = MULTIPART_RETRY_BASE_DELAY * 2 ** (attempt - 1);
+        await sleep(delay);
+      }
     }
   };
 
+  const workers = Array.from(
+    { length: Math.min(MULTIPART_CONCURRENCY, pendingPartNumbers.length || 1) },
+    async () => {
+      while (pendingPartNumbers.length) {
+        const partNumber = pendingPartNumbers.shift();
+        if (!partNumber) return;
+        await uploadOnePart(partNumber);
+      }
+    }
+  );
+
+  await Promise.all(workers);
+
   const uploadedParts = [];
-  for (const part of promiseGenerator()) {
-    const { partNumber, etag } = await part;
-    uploadedParts[partNumber - 1] = { partNumber, etag };
+  for (let i = 1; i <= totalChunks; i++) {
+    uploadedParts.push(uploadedPartsMap[i]);
   }
+
   const completeParams = new URLSearchParams({ uploadId });
   await axios.post(`/api/write/items/${key}?${completeParams}`, {
     parts: uploadedParts,
   });
+
+  clearMultipartState(stateKey);
 }

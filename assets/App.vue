@@ -199,7 +199,7 @@
           </button>
         </li>
         <li>
-          <a :href="`/raw/${focusedItem.key}`" target="_blank" download>
+          <a :href="`/raw/${focusedItem.key}?download=1`" target="_blank" download>
             <span>下载</span>
           </a>
         </li>
