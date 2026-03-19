@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler pages dev . --r2 BUCKET",
     "build": "echo 'Build completed'",
-    "deploy": "wrangler deploy",
+    "deploy": "wrangler publish",
     "deploy:pages": "wrangler pages deploy .",
     "preview": "wrangler pages dev . --r2 BUCKET"
   },
@@ -20,7 +20,7 @@
   },
   "homepage": "https://github.com/longern/FlareDrive#readme",
   "devDependencies": {
-    "@cloudflare/workers-types": "^3.3.1",
-    "wrangler": "^2.6.2"
+    "@cloudflare/workers-types": "^4.0.0",
+    "wrangler": "^3.0.0"
   }
 }
