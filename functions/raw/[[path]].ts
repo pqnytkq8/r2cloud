@@ -1,6 +1,23 @@
 import { notFound, parseBucketPath } from "@/utils/bucket";
 import { get_auth_status_for_read } from "@/utils/auth";
 
+function createPipedResponse(context, body: ReadableStream | null, init: ResponseInit) {
+  if (!body) return new Response(null, init);
+
+  const { readable, writable } = new TransformStream();
+  const pipePromise = body.pipeTo(writable).catch((error) => {
+    try {
+      writable.abort(error);
+    } catch (_e) {}
+  });
+
+  if (typeof context?.waitUntil === "function") {
+    context.waitUntil(pipePromise);
+  }
+
+  return new Response(readable, init);
+}
+
 function parseRangeHeader(rangeHeader: string, size: number) {
   if (!rangeHeader?.startsWith("bytes=")) return null;
   const value = rangeHeader.slice(6).trim();
@@ -103,7 +120,7 @@ export async function onRequestGet(context) {
         headers.set("Content-Length", String(object.size));
       }
 
-      return new Response(object.body, {
+      return createPipedResponse(context, object.body, {
         headers,
         status: 200,
       });
@@ -161,7 +178,7 @@ export async function onRequestGet(context) {
     );
     headers.set("Content-Length", String(parsedRange.length));
 
-    return new Response(object.body, {
+    return createPipedResponse(context, object.body, {
       headers: headers,
       status: 206,
     });
