@@ -1,59 +1,34 @@
-import { S3Client } from "@/utils/s3";
-
-async function getCurrentBucket(context) {
-  const { request, env } = context;
-  const url = new URL(request.url);
-  const driveid = url.hostname.replace(/\..*/, "");
-
-  if (!(await env[driveid].head("_$flaredrive$/CNAME")))
-    await env[driveid].put("_$flaredrive$/CNAME", url.hostname);
-
-  const client = new S3Client(env.AWS_ACCESS_KEY_ID, env.AWS_SECRET_ACCESS_KEY);
-  const bucketsResponse = await client.s3_fetch(
-    `https://${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com/`
-  );
-  const bucketsText = await bucketsResponse.text();
-  const bucketNames = [
-    ...bucketsText.matchAll(/<Name>([0-9a-z-]*)<\/Name>/g),
-  ].map((match) => match[1]);
-  const currentBucket = await Promise.any(
-    bucketNames.map(
-      (name) =>
-        new Promise<string>((resolve, reject) => {
-          client
-            .s3_fetch(
-              `https://${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com/${name}/_$flaredrive$/CNAME`
-            )
-            .then((response) => response.text())
-            .then((text) => {
-              if (text === url.hostname) resolve(name);
-              else reject();
-            })
-            .catch(() => reject());
-        })
-    )
-  );
-
-  return new Response(currentBucket, {
-    headers: { "cache-control": "max-age=604800" },
-  });
-}
+import { notFound } from "@/utils/bucket";
 
 export async function onRequestGet(context) {
   try {
     const { request, env } = context;
-
     const url = new URL(request.url);
-    if (url.searchParams.has("current")) return await getCurrentBucket(context);
+    
+    // 检查是否要获取当前存储桶
+    if (url.searchParams.has("current")) {
+      // 返回一个默认的存储桶名称
+      return new Response("BUCKET", {
+        headers: { "cache-control": "max-age=604800" },
+      });
+    }
 
-    const client = new S3Client(
-      env.AWS_ACCESS_KEY_ID,
-      env.AWS_SECRET_ACCESS_KEY
+    // 返回存储桶列表（简化版）
+    return new Response(
+      JSON.stringify({
+        buckets: [
+          {
+            name: env.BUCKET ? "BUCKET" : "default",
+            creationDate: new Date().toISOString(),
+          },
+        ],
+      }),
+      {
+        headers: { "Content-Type": "application/json" },
+      }
     );
-    return client.s3_fetch(
-      `https://${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com/`
-    );
-  } catch (e) {
+  } catch (e: any) {
     return new Response(e.toString(), { status: 500 });
   }
 }
+
