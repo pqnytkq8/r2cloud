@@ -93,36 +93,17 @@ export async function onRequest(context: any) {
       });
     }
 
-    // 静态文件和主页处理
-    // 优先级：资源文件 > 主文件 > 404
-    const staticPaths = [
-      "/index.html",
-      "/404.html",
-      "/robots.txt",
-      "/assets/",
-    ];
-
-    const isStatic = staticPaths.some((p) => pathname === p || pathname.startsWith(p));
-
-    if (isStatic || pathname === "/" || pathname.endsWith(".css") || pathname.endsWith(".mjs") || pathname.endsWith(".json")) {
-      // 尝试从 Worker 资源中获取
-      const response = await fetch(
-        new URL(pathname === "/" ? "/index.html" : pathname, url.origin).toString(),
-        {
-          method: request.method,
-          headers: request.headers,
-          body: request.method !== "HEAD" && request.method !== "GET" ? request.body : undefined,
-        }
-      );
-      return response;
+    // 默认处理：静态文件或 SPA 路由
+    // 让 Workers 处理静态文件（index.html、assets 等）
+    // 如果是 API 路由但不在上面匹配，返回 404
+    if (pathname.startsWith("/") && !pathname.startsWith("/api/") && !pathname.startsWith("/raw/")) {
+      // 这是一个潜在的静态文件或 SPA 路由
+      // 直接由 Workers 的静态文件服务器处理
+      return context.next?.() || new Response("Not found", { status: 404 });
     }
 
-    // 其他请求转发到主页（SPA 路由）
-    const response = await fetch(new URL("/index.html", url.origin).toString());
-    return new Response(response.body, {
-      status: 200,
-      headers: response.headers,
-    });
+    // 其他未知请求返回 404
+    return new Response("Not found", { status: 404 });
   } catch (error: any) {
     console.error("Middleware error:", error);
     return new Response("Internal Server Error", { status: 500 });
