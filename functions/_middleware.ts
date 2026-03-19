@@ -1,6 +1,6 @@
 /**
  * 中间件：处理所有请求路由
- * Cloudflare Pages 和 Workers 统一入口
+ * 支持 Cloudflare Workers 和 Pages 部署
  */
 
 // 导入所有路由处理器
@@ -93,11 +93,40 @@ export async function onRequest(context: any) {
       });
     }
 
-    // 其他请求转发到 Pages（静态文件和主页）
-    return context.next();
+    // 静态文件和主页处理
+    // 优先级：资源文件 > 主文件 > 404
+    const staticPaths = [
+      "/index.html",
+      "/404.html",
+      "/robots.txt",
+      "/assets/",
+    ];
+
+    const isStatic = staticPaths.some((p) => pathname === p || pathname.startsWith(p));
+
+    if (isStatic || pathname === "/" || pathname.endsWith(".css") || pathname.endsWith(".mjs") || pathname.endsWith(".json")) {
+      // 尝试从 Worker 资源中获取
+      const response = await fetch(
+        new URL(pathname === "/" ? "/index.html" : pathname, url.origin).toString(),
+        {
+          method: request.method,
+          headers: request.headers,
+          body: request.method !== "HEAD" && request.method !== "GET" ? request.body : undefined,
+        }
+      );
+      return response;
+    }
+
+    // 其他请求转发到主页（SPA 路由）
+    const response = await fetch(new URL("/index.html", url.origin).toString());
+    return new Response(response.body, {
+      status: 200,
+      headers: response.headers,
+    });
   } catch (error: any) {
     console.error("Middleware error:", error);
     return new Response("Internal Server Error", { status: 500 });
   }
 }
+
 

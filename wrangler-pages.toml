@@ -1,0 +1,15 @@
+# Cloudflare Pages 配置（推荐用于部署）
+# 此配置用于通过 Pages 部署
+
+name = "flaredrive"
+
+# R2 存储桶绑定
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "your-bucket-name"
+
+# 环境变量 - 在 Cloudflare Pages 控制面板中配置以下变量：
+# PUBURL (可选，已弃用)
+# GUEST = "public/"
+# admin:password = "*"
+# user:password = "user/,public/"

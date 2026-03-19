@@ -3,7 +3,11 @@
   "version": "0.0.1",
   "description": "CloudFlare R2 storage manager with Pages and Workers.",
   "scripts": {
-    "dev": "wrangler pages dev . --r2 BUCKET"
+    "dev": "wrangler pages dev . --r2 BUCKET",
+    "build": "echo 'Build completed'",
+    "deploy": "wrangler deploy",
+    "deploy:pages": "wrangler pages deploy .",
+    "preview": "wrangler pages dev . --r2 BUCKET"
   },
   "repository": {
     "type": "git",
