@@ -53,7 +53,7 @@ export async function get_auth_status(context) {
 
 /**
  * 检查用户是否有权限读取指定路径（带缓存）
- * 支持读取权限配置，若无读权限则需要写入权限代替
+ * 优先级：游客权限 > 认证用户权限 > 系统文件权限
  */
 export async function get_auth_status_for_read(context, filePath) {
     const authHeader = context.request.headers.get('Authorization') || 'guest';
@@ -67,19 +67,23 @@ export async function get_auth_status_for_read(context, filePath) {
     
     let result = false;
     
-    // 系统文件需要写入权限
-    if (filePath.startsWith("_$flaredrive$/")) {
-        result = await check_user_permission(context, filePath);
-    } else if (context.env["GUEST"]) {
-        // 游客可读 GUEST 目录
-        const allow_guest = context.env["GUEST"].split(",");
+    // 1. 游客权限（最优先，不需要认证）
+    if (context.env["GUEST"] && !filePath.startsWith("_$flaredrive$/")) {
+        const allow_guest = context.env["GUEST"].split(",").map(p => p.trim());
         result = allow_guest.some(p => p === "*" || filePath.startsWith(p));
-        if(!result) result = await check_user_permission(context, filePath);
-    } else {
-        result = await check_user_permission(context, filePath);
+        if(result) {
+            // 缓存成功的游客访问
+            try {
+                await context.env.CACHE?.put(cacheKey, 'true', { expirationTtl: 1800 });
+            } catch(e) {}
+            return true;
+        }
     }
     
-    // 缓存 30 分钟
+    // 2. 认证用户权限
+    result = await check_user_permission(context, filePath);
+    
+    // 缓存结果
     try {
         await context.env.CACHE?.put(cacheKey, String(result), { expirationTtl: 1800 });
     } catch(e) {}
